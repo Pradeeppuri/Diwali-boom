@@ -158,3 +158,316 @@ document.getElementById("touchText").addEventListener("click", () => {
 </script>
 </body>
 </html>
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Surendra — Happy Diwali 🎆</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:radial-gradient(circle at bottom, #000010, #000);overflow:hidden;font-family:system-ui,Arial}
+  #canvas{position:fixed;inset:0;display:block}
+  #touchText{
+    position:fixed;left:50%;transform:translateX(-50%);bottom:28px;
+    background:linear-gradient(90deg,#ffb347,#ff5e62);color:#222;padding:12px 20px;border-radius:28px;
+    font-weight:700;box-shadow:0 10px 30px rgba(255,94,98,0.28);cursor:pointer;z-index:20;
+  }
+  #diwaliText{
+    position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:30;
+    opacity:0; transform:translateY(6vh) scale(0.95);
+    transition:opacity 900ms cubic-bezier(.2,.9,.2,1), transform 900ms cubic-bezier(.2,.9,.2,1);
+    text-align:center;
+  }
+  .diwaliInner{
+    font-size:clamp(26px,6vw,64px); font-weight:900; color:#fff;
+    text-shadow:0 8px 30px rgba(255,150,30,0.18), 0 0 60px rgba(255,100,20,0.12);
+    letter-spacing:1px; padding:12px 22px; border-radius:12px;
+    background: linear-gradient(180deg, rgba(0,0,0,0.15), rgba(255,255,255,0.02));
+  }
+  .smoke{
+    position:fixed;inset:0;z-index:25;pointer-events:none;opacity:0;transition:opacity 1.4s ease;
+    background:
+      radial-gradient(circle at 40% 30%, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.6) 6%, rgba(255,255,255,0.18) 20%, rgba(0,0,0,0) 60%),
+      radial-gradient(circle at 60% 65%, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.45) 8%, rgba(255,255,255,0.06) 30%, rgba(0,0,0,0) 80%);
+    backdrop-filter: blur(6px);
+  }
+
+  /* small HUD for config (hidden on mobile) */
+  #hud{position:fixed;top:12px;right:12px;background:rgba(0,0,0,0.45);color:#fff;padding:8px 10px;border-radius:10px;font-size:13px;z-index:40}
+  #hud label{font-size:12px;opacity:0.85;margin-right:6px}
+  #hud input{width:50px;border-radius:6px;padding:4px;border:0;background:#111;color:#fff}
+  @media (max-width:700px){ #hud{display:none} }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="diwaliText"><div class="diwaliInner">🎇 Surendra — Happy Diwali 🎆</div></div>
+<div class="smoke" id="smoke"></div>
+
+<div id="touchText">✨ Touch to Open ✨</div>
+
+<!-- optional HUD to tweak salvo (desktop only) -->
+<div id="hud">
+  <label>Rockets:</label><input id="cfgCount" type="number" min="1" max="30" value="10" />
+  <label style="margin-left:8px">Interval(ms):</label><input id="cfgInterval" type="number" min="50" max="2000" value="220" />
+</div>
+
+<script>
+/*
+  Auto-salvo fireworks:
+  - Touch to start -> fullscreen (if allowed) + sequence of rockets launch automatically
+  - Each rocket launches upward with trail, then explodes into particles
+  - After major explosion(s) we show white smoke + greeting text
+  - Config (desktop HUD): number of rockets and interval between launches
+  - No external libs, pure canvas 2D for compatibility & performance on mobile
+*/
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d', { alpha: true });
+let W = canvas.width = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+
+window.addEventListener('resize', () => { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; });
+
+/* Config */
+const cfgCountInput = document.getElementById('cfgCount');
+const cfgIntervalInput = document.getElementById('cfgInterval');
+function getCfg(){ return { total: Math.max(1, parseInt(cfgCountInput.value||10)), interval: Math.max(50, parseInt(cfgIntervalInput.value||220)) }; }
+
+/* Entities */
+const rockets = [];   // active rockets
+const particles = []; // explosion particles
+const trails = [];    // small trail points to draw streaks
+
+/* Utility */
+function rand(min, max){ return Math.random()*(max-min)+min; }
+function hslHue(h){ return `hsl(${h}, 100%, ${rand(45,65)}%)`; }
+
+/* Rocket class */
+class Rocket {
+  constructor(x, color){
+    this.x = x;
+    this.y = H + 10;
+    this.vy = - (rand(7.5, 11.5)); // upward speed
+    this.vx = rand(-0.6, 0.6);
+    this.color = color;
+    this.altitudeTarget = rand(H*0.28, H*0.45); // where to explode (smaller = higher on screen)
+    this.exploded = false;
+    this.trailTimer = 0;
+    this.size = 3.2 + Math.random()*1.6;
+  }
+  update(dt){
+    this.vy += -0.02; // small upward acceleration for more lift
+    this.x += this.vx;
+    this.y += this.vy;
+    // create trail
+    this.trailTimer += dt;
+    if(this.trailTimer > 10){
+      trails.push({ x: this.x, y: this.y, life: 280 + Math.random()*120, size:1.8 + Math.random()*1.6, color: this.color });
+      this.trailTimer = 0;
+    }
+    // check explode
+    if(this.y < this.altitudeTarget && !this.exploded){
+      this.exploded = true;
+      explodeAt(this.x, this.y, this.color, 1.0 + Math.random()*0.9);
+    }
+    // if off-screen remove
+    if(this.y < -60) this.dead = true;
+  }
+  draw(ctx){
+    // bright head
+    ctx.beginPath();
+    ctx.fillStyle = this.color;
+    ctx.arc(this.x, this.y, this.size, 0, Math.PI*2);
+    ctx.fill();
+    // tiny glow
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, 24);
+    g.addColorStop(0, this.color);
+    g.addColorStop(0.35, 'rgba(255,200,100,0.45)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(this.x, this.y, 24, 0, Math.PI*2); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+}
+
+/* Explosion -> spawn many particles */
+function explodeAt(x, y, color, power=1.0){
+  const count = Math.floor(80 * power + rand(0, 160 * power));
+  const hue = Math.floor(rand(10, 50)) + Math.floor(rand(0, 300));
+  for(let i=0;i<count;i++){
+    const ang = Math.random()*Math.PI*2;
+    const sp = rand(1.8, 8.6) * (0.9 + Math.random()*1.6) * power;
+    particles.push({
+      x, y,
+      vx: Math.cos(ang)*sp,
+      vy: Math.sin(ang)*sp * 0.9,
+      life: 1200 + Math.random()*1800,
+      size: 1.2 + Math.random()*3.6,
+      color: hslHue(hue + rand(-40,40))
+    });
+    // also spawn mini sparks as trails
+    trails.push({ x, y, life: 600 + Math.random()*800, size: 1.0 + Math.random()*2.4, color: hslHue(hue + rand(-30,30)) });
+  }
+  // after the big explosion(s) show smoke and greeting (debounced)
+  scheduleSmokeAndText();
+}
+
+/* Trails & particles update/draw */
+function updateEntities(dt){
+  // rockets
+  for(let i=rockets.length-1;i>=0;i--){
+    rockets[i].update(dt);
+    if(rockets[i].dead) rockets.splice(i,1);
+  }
+  // particles
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.vy += 0.06 * dt * 0.6; // gravity effect
+    p.vx *= 0.998;
+    p.vy *= 0.999;
+    p.x += p.vx * (dt*0.06);
+    p.y += p.vy * (dt*0.06);
+    p.life -= dt;
+    if(p.life <= 0) particles.splice(i,1);
+  }
+  // trails
+  for(let i=trails.length-1;i>=0;i--){
+    const t = trails[i];
+    t.life -= dt;
+    t.y += 0.03 * dt; // slow fall
+    if(t.life <= 0) trails.splice(i,1);
+  }
+}
+
+/* draw everything */
+function draw(){
+  // semi-clear with slight fade to create persistence
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(0,0,W,H);
+
+  // trails (streaks)
+  ctx.globalCompositeOperation = 'lighter';
+  for(const t of trails){
+    const alpha = Math.max(0, Math.min(1, t.life / 1200));
+    ctx.beginPath();
+    ctx.fillStyle = hexWithAlpha(t.color, alpha*0.9);
+    ctx.ellipse(t.x, t.y, Math.max(0.5,t.size), Math.max(0.5,t.size*4), Math.PI*0.5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // particles (sparks)
+  for(const p of particles){
+    const alpha = Math.max(0, Math.min(1, p.life / 1800));
+    ctx.beginPath();
+    ctx.fillStyle = hexWithAlpha(p.color, alpha);
+    ctx.arc(p.x, p.y, Math.max(0.6, p.size), 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // rockets on top
+  for(const r of rockets) r.draw(ctx);
+
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/* helper to convert hsl string to rgba quickly (we use canvas fillStyle with rgba) */
+function hexWithAlpha(hsl, a){
+  // if already hsl string, just return with alpha small fallback using canvas globalAlpha
+  // but we will simply return the color as-is and rely on globalAlpha where needed
+  return hsl.replace('hsl', 'hsla').replace(')', `, ${a})`);
+}
+
+/* smoke & text scheduling (debounced so multiple explosions don't retrigger rapidly) */
+let smokeTimer = null;
+function scheduleSmokeAndText(){
+  if(smokeTimer) clearTimeout(smokeTimer);
+  smokeTimer = setTimeout(()=> {
+    // show smoke
+    const smokeElem = document.getElementById('smoke');
+    smokeElem.style.opacity = '1';
+    // show text
+    const di = document.getElementById('diwaliText');
+    di.style.opacity = '1'; di.style.transform = 'translateY(0) scale(1)';
+    // hide after durations
+    setTimeout(()=> { smokeElem.style.opacity = '0'; }, 3800);
+    setTimeout(()=> { di.style.opacity = '0'; di.style.transform = 'translateY(6vh) scale(0.95)'; }, 4200);
+    smokeTimer = null;
+  }, 700); // show smoke ~700ms after explosion(s)
+}
+
+/* auto-salvo launcher */
+let launching = false;
+async function startAutoSalvo(){
+  if(launching) return;
+  launching = true;
+
+  // try fullscreen (user gesture)
+  const docEl = document.documentElement;
+  if(docEl.requestFullscreen) docEl.requestFullscreen().catch(()=>{});
+  else if(docEl.webkitRequestFullscreen) docEl.webkitRequestFullscreen();
+
+  // hide touch button
+  document.getElementById('touchText').style.display = 'none';
+
+  const cfg = getCfg();
+  const total = cfg.total;
+  const interval = cfg.interval;
+
+  // launch total rockets spaced by interval; each rocket's horizontal start randomized across width
+  for(let i=0;i<total;i++){
+    const startX = rand(W*0.12, W*0.88);
+    const hue = Math.floor(rand(0, 360));
+    rockets.push(new Rocket(startX, hslHue(hue)));
+    // small chance for multiple simultaneous launches for salvo feel
+    if(Math.random() < 0.18){
+      // spawn 1-2 extra rockets nearby
+      for(let j=0;j<Math.floor(rand(1,2)); j++){
+        rockets.push(new Rocket(Math.min(W-10, Math.max(10, startX + rand(-28,28))), hslHue(hue + rand(-30,30))));
+      }
+    }
+    await sleep(interval + Math.floor(rand(-interval*0.35, interval*0.45))); // slight randomness
+  }
+
+  // after salvo complete, allow re-trigger after some cooldown
+  setTimeout(()=> { launching = false; document.getElementById('touchText').style.display = ''; }, 3500);
+}
+
+/* small helpers */
+function sleep(ms){ return new Promise(res => setTimeout(res, ms)); }
+
+/* animation loop using delta timing */
+let last = performance.now();
+function loop(now){
+  const dt = now - last;
+  last = now;
+  updateEntities(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* start salvo on touch/click */
+document.getElementById('touchText').addEventListener('click', () => {
+  startAutoSalvo();
+});
+
+/* also allow tapping anywhere when button hidden to retrigger later */
+canvas.addEventListener('click', () => {
+  if(!launching) startAutoSalvo();
+});
+
+/* initial faint background stars for depth */
+(function createBackground(){
+  for(let i=0;i<80;i++){
+    trails.push({ x: rand(0,W), y: rand(0,H*0.6), life: 2600 + Math.random()*4200, size: rand(0.4,1.6), color: hslHue(rand(0,360)) });
+  }
+})();
+
+</script>
+</body>
+</html>
